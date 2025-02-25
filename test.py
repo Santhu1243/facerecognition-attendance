@@ -1,36 +1,45 @@
+import os
 import cv2
 import face_recognition
 import numpy as np
-import os
+from datetime import datetime
 
-# Define the folder where images will be stored
-save_folder = r"C:\Users\santh\OneDrive\Desktop\iot\captured_images"  # Change this path
-if not os.path.exists(save_folder):
-    os.makedirs(save_folder)
+# Set OpenCV backend to avoid GUI errors
+os.environ["QT_QPA_PLATFORM"] = "xcb"
 
-# Load known faces and their names
+# Define paths for known faces and captured images
+KNOWN_FACES_FOLDER = "/home/chezzuser/Desktop/face_auth/facerecognition-attendance/known_faces"  # Change if needed
+SAVE_FOLDER = "/home/chezzuser/Desktop/face_auth/facerecognition-attendance/captured_images"
+
+# Ensure save folder exists
+os.makedirs(SAVE_FOLDER, exist_ok=True)
+
+# Load known faces
 known_face_encodings = []
 known_face_names = []
 
-# Load images of known people
-known_faces_folder = r"C:\Users\santh\OneDrive\Desktop\iot\known_faces"  # Change this path
-for filename in os.listdir(known_faces_folder):
-    if filename.endswith(".jpg") or filename.endswith(".png"):
-        path = os.path.join(known_faces_folder, filename)
+for filename in os.listdir(KNOWN_FACES_FOLDER):
+    if filename.endswith((".jpg", ".png")):
+        path = os.path.join(KNOWN_FACES_FOLDER, filename)
         image = face_recognition.load_image_file(path)
-        encoding = face_recognition.face_encodings(image)
+        encodings = face_recognition.face_encodings(image)
 
-        if encoding:  # Only add if encoding exists
-            known_face_encodings.append(encoding[0])
-            known_face_names.append(os.path.splitext(filename)[0])  # Use file name as person's name
+        if encodings:  # Ensure at least one encoding exists
+            known_face_encodings.append(encodings[0])
+            known_face_names.append(os.path.splitext(filename)[0])  # Extract name from filename
 
-# Initialize webcam
-camera_index = 0  # Change this if needed
-cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+# Initialize camera
+cap = cv2.VideoCapture(0, cv2.CAP_V4L2)  # Use V4L2 for better performance
+
+# Set lower resolution for speed optimization
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
 if not cap.isOpened():
     print("Failed to access the camera. Try changing the camera index.")
     exit()
+
+print("Face recognition started. Press 'q' to exit.")
 
 while True:
     ret, frame = cap.read()
@@ -38,41 +47,40 @@ while True:
         print("Could not read frame. Exiting...")
         break
 
-    # Convert frame to RGB (face_recognition uses RGB)
+    # Convert frame to RGB (face_recognition requires RGB)
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-    # Detect faces and their encodings
+    # Detect faces
     face_locations = face_recognition.face_locations(rgb_frame)
     face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
 
     for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
-        matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
+        matches = face_recognition.compare_faces(known_face_encodings, face_encoding, tolerance=0.5)  # Lower tolerance for better accuracy
         name = "Unknown"
 
-        # Find the best match
-        face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
-        best_match_index = np.argmin(face_distances) if len(face_distances) > 0 else None
+        if True in matches:
+            matched_idx = matches.index(True)
+            name = known_face_names[matched_idx]
 
-        if best_match_index is not None and matches[best_match_index]:
-            name = known_face_names[best_match_index]
+        # Draw bounding box and label
+        color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)  # Green for known, red for unknown
+        cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
+        cv2.putText(frame, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        # Draw a rectangle around the face
-        cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-        # Display the name below the face
-        cv2.rectangle(frame, (left, bottom - 35), (right, bottom), (0, 255, 0), cv2.FILLED)
-        cv2.putText(frame, name, (left + 6, bottom - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        # Save image if unknown face is detected
+        # if name == "Unknown":
+        #     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        #     filename = os.path.join(SAVE_FOLDER, f"unknown_{timestamp}.jpg")
+        #     cv2.imwrite(filename, frame)
+        #     print(f"Saved unknown face to {filename}")
 
-    cv2.imshow('Face Recognition - Press "C" to Capture, "Q" to Quit', frame)
+    # Display the frame
+    cv2.imshow("Face Recognition", frame)
 
-    key = cv2.waitKey(1) & 0xFF
-
-    if key == ord('c'):
-        filename = os.path.join(save_folder, "captured_face.jpg")
-        cv2.imwrite(filename, frame)
-        print(f"📷 Image saved at: {filename}")
-
-    elif key == ord('q'):
+    # Press 'q' to exit
+    if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
+# Release resources
 cap.release()
 cv2.destroyAllWindows()
